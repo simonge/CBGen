@@ -1,0 +1,9 @@
+AtomicZ      6
+AtomicMass   11.177929
+CellN        8
+CellVol      45.5e-30
+LatticeA     3.6683e-10
+DebyeTemp    2230
+Temperature  300
+RockingAngle 0.00
+Structure    Diamond

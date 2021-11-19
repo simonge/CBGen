@@ -1,0 +1,760 @@
+//
+// phonoZero.C - computes the coherent bremsstrahlung energy and
+//               polarization spectrum from the zero-phonons process.
+//
+// author: richard.t.jones at uconn.edu
+// version: may 6, 2017
+
+#include <iostream>
+#include <math.h>
+
+#include <TH1D.h>
+#include <TH2D.h>
+#include <TAxis.h>
+#include <TFile.h>
+#include <TTree.h>
+#include <TROOT.h>
+#include <TRandom3.h>
+
+#include "Complex.h"
+#include "TPhoton.h"
+#include "TLepton.h"
+#include "TCrossSection.h"
+#include "TThreeVectorReal.h"
+#include "TFourVectorReal.h"
+#include "TLorentzBoost.h"
+#include "constants.h"
+
+#include "AdaptiveSampler.cc"
+
+#include "sqr.h"
+#include "hats.h"
+
+// parameters for the beamline
+double Ebeam = 12.;     // GeV
+double radcoldist = 76.; // m
+double pbeam = sqrt(sqr(Ebeam) - sqr(mElectron));
+
+// physical parameters for the target crystal
+const double Eedge = 9.;      // GeV
+const double qtotal_220 = 9.8e-6; // GeV
+const double qlong_220 = Eedge / (Ebeam - Eedge) * 
+                         sqr(mElectron) / (2 * Ebeam);
+const double aLattice = 3.567e-10;   // m
+const double hbarc = 1.97327e-16;    // GeV.m
+const double kBoltzmann = 8.617e-14; // GeV/K
+const double cP = 15e3 / 3e8;        // speed of sound, longitudinal mode
+const double cS = 12e3 / 3e8;        // speed of sound, transverse mode
+const double TDebye = 2200;          // K
+double kT = kBoltzmann * 300;        // GeV
+
+const double Ncell = 8;
+const double Vcell = 45.5e-30;       // m^3
+const double Matom = 12 * 0.932;     // GeV/c^2
+const double Qmax = 2 * M_PI * hbarc / aLattice; // GeV/c
+const double log_10 = log(10.);
+
+double L1dual0 = 0;
+
+TH2D *hDQ2q_high_q2 = 0;
+TH2D *hDQ2_low_q2 = 0;
+
+// fRandom MUST be initialized before use, but I find that
+// if I call the constructor here at file scope then sometimes
+// processes started near to the same time on the same machine
+// end up generating the exact same sequence. Watch out for that!
+// One way to reduce the likelihood of it happening is to insert
+// a wait of a few seconds between the startup of each process.
+
+TRandom3 *fRandom = new TRandom3(0);
+void unif01(int n, double *u) { fRandom->RndmArray(n,u); }
+
+TH1D *hL1dual = 0;
+TH1D *hRDdual = 0;
+
+double nBoseEinstein(double hnu)
+{
+   double xfactor = hnu / kT;
+   if (xfactor > 1e-8)
+      return 1 / (exp(xfactor) - 1);
+   else
+      return 1 / (xfactor + xfactor * xfactor / 2);
+}
+
+double fdispersion(TThreeVectorReal Q, int branch)
+{
+   // Compute the energy hbar omega(Q) of a phonon in branch:
+   //  branch = 0: longitudinal acoustic branch
+   //  branch = 1: transverse accoustic branch
+   //  branch = 2: longitudinal optical branch
+   //  branch = 3: transverse optical branch
+   // The result is returned in GeV.
+
+   // The first Brillouin zone is a truncated octahedron
+
+   if (fabs(Q[1] + Q[2] + Q[3]) > 1.5 * Qmax ||
+       fabs(Q[1] + Q[2] - Q[3]) > 1.5 * Qmax ||
+       fabs(Q[1] - Q[2] + Q[3]) > 1.5 * Qmax ||
+       fabs(Q[1] - Q[2] - Q[3]) > 1.5 * Qmax ||
+       fabs(Q[1]) > Qmax ||
+       fabs(Q[2]) > Qmax ||
+       fabs(Q[3]) > Qmax)
+   {
+      return 0;
+   }
+
+   const double hpi = M_PI / 2;
+   if (branch == 0) {
+      TThreeVector chi(Q * (hpi / Qmax));
+      double x2 = sqr(sin(chi[1])) + sqr(sin(chi[2])) + sqr(sin(chi[3]));
+      return cP * Qmax * sqrt(x2) / hpi;
+   }
+   else if (branch == 1) {
+      TThreeVector chi(Q * (hpi / Qmax));
+      double x2 = sqr(sin(chi[1])) + sqr(sin(chi[2])) + sqr(sin(chi[3]));
+      return cS * Qmax * sqrt(x2) / hpi;
+   }
+   else if (branch == 2 || branch == 3) {
+      return cP * Qmax * 0.9; // adjusted to match measured spectra
+   }
+   return 0;
+}
+double fdispersion_d(double QQ[3], int branch) {
+   TThreeVectorReal Q(QQ[0], QQ[1], QQ[2]);
+   return fdispersion(Q, branch);
+}
+
+double L1Q2(TThreeVectorReal Q, TThreeVectorReal q)
+{
+   double costheta = Q.Dot(q) / (Q.Length() * q.Length());
+   double flong = sqr(costheta);
+   double ftrans = 1 - flong;
+   double hnu;
+   double result = 0;
+   hnu = fdispersion(Q, 0);
+   if (hnu > 0)
+      result += flong * (2 * nBoseEinstein(hnu) + 1) / hnu;
+   hnu = fdispersion(Q, 1);
+   if (hnu > 0)
+      result += ftrans * (2 * nBoseEinstein(hnu) + 1) / hnu;
+   hnu = fdispersion(Q, 2);
+   if (hnu > 0)
+      result += flong * (2 * nBoseEinstein(hnu) + 1) / hnu;
+   hnu = fdispersion(Q, 3);
+   if (hnu > 0)
+      result += ftrans * (2 * nBoseEinstein(hnu) + 1) / hnu;
+   result *= Q.LengthSqr();
+   result *= kBoltzmann * TDebye;
+   result /= pow(2 * Qmax, 3);
+   result *= 4 * M_PI / 3; // see definition of L1
+   return result;
+}
+double L1Q2_d(double QQ[3], double qq[3])
+{
+   TThreeVector Q(QQ[0], QQ[1], QQ[2]);
+   TThreeVector q(qq[0], qq[1], qq[2]);
+   return L1Q2(Q, q);
+}
+
+TH1D *L1Q2_hist(int nbins, double Qlimit, int nsamples=100000)
+{
+   if (fRandom == 0) {
+      std::cerr << "Error in L1Q2_hist - you must call setseed() "
+                << "to initialize the random number generator "
+                << "before the first call to L1Q2_hist, giving up."
+                << std::endl;
+      return 0;
+   }
+   TH1D *hL1Q2 = new TH1D("hL1Q2", "L1(Q) Q^2", nbins, 0, Qlimit);
+   TThreeVector q(1, 0, 0);
+   for (int i=0; i < nbins; ++i) {
+      double Qmag = hL1Q2->GetXaxis()->GetBinCenter(i+1);
+      for (int sample=0; sample < nsamples; ++sample) {
+         double costheta = 2 * fRandom->Uniform() - 1;
+         double sintheta = sqrt( 1 - sqr(costheta));
+         double phi = 2*M_PI * fRandom->Uniform();
+         TThreeVector Q(Qmag * sintheta * cos(phi),
+                        Qmag * sintheta * sin(phi),
+                        Qmag * costheta);
+         hL1Q2->Fill(Qmag, L1Q2(Q, q) / nsamples);
+      }
+   }
+   return hL1Q2;
+}
+
+double L1dual_KM(double R, int ndiv=1000)
+{
+   double Qrad = (2*M_PI * hbarc) * pow(8 * 3 / (4 * M_PI) / Vcell, 1/3.);
+   double RQrad = (R + 1e-18) * Qrad / hbarc;
+   double dx = 1. / ndiv;
+   double sum = 0;
+   for (int i=0; i < ndiv; ++i) {
+      double x = (i + 0.5) * dx;
+      double hnu = x * kBoltzmann * TDebye;
+      double term = (2 * nBoseEinstein(hnu) + 1) * sin(RQrad * x);
+      sum += term;
+   }
+   sum /= RQrad * ndiv;
+   return sum;
+}
+
+double L1dual(double R, int ndiv=1000)
+{
+   double Qlimit = 1.5 * Qmax;
+   TH1D *hL1Q2 = (TH1D*)gDirectory->Get("hL1Q2");
+   if (hL1Q2 == 0)
+      hL1Q2 = L1Q2_hist(200, Qlimit);
+   double dQ = Qlimit / ndiv;
+   double uR = R / hbarc + 1e-99;
+   double sum = 0;
+   for (int i=0; i < ndiv; ++i) {
+      double Q = dQ * (i + 0.5);
+      double RQ = uR * Q;
+      sum += hL1Q2->Interpolate(Q) * sin(RQ) / RQ;
+   }
+   return sum * dQ;
+}
+
+TH1D *L1dual_hist(int nbins, double Rmax, double Rmin=1e-12, int ndiv=1000)
+{
+   double log10Rmin = log(Rmin) / log_10;
+   double log10Rmax = log(Rmax) / log_10;
+   TH1D *h = new TH1D("hL1dual", "L1dual(R) vs log10(R)",
+                      nbins, log10Rmin, log10Rmax);
+   for (int i=0; i < nbins; ++i) {
+      double R = pow(10, h->GetXaxis()->GetBinCenter(i+1));
+      h->SetBinContent(i+1, L1dual(R, ndiv * 5));
+   }
+   return h;
+}
+
+void make_hL1dual(double R, int nbins=1000)
+{
+   double Rmin;
+   double Rmax;
+   if (hL1dual) {
+      nbins = hL1dual->GetNbinsX();
+      Rmax = pow(10, hL1dual->GetXaxis()->GetBinUpEdge(nbins));
+      if (R <= Rmax)
+         return;
+      else
+         delete hL1dual;
+   }
+   Rmax = (R > 1e-9)? R : 1e-9;
+   Rmin = (R < 1e-12)? R : 1e-12;
+   hL1dual = L1dual_hist(nbins, Rmax, Rmin, nbins);
+}
+
+void set_temperature(double T)
+{
+   kT = kBoltzmann * T;
+   std::cout << "Changed radiator temperature to " << T << " K" << std::endl;
+
+   // Compare the phonon spectral factor at this temperature
+   // with the low-temperature expansion in Kaune, Miller et al.
+   TH1D *hL1Q2 = (TH1D*)gDirectory->Get("hL1Q2");
+   if (hL1Q2)
+      gDirectory->Delete("hL1Q2");
+   double L1d = L1dual(0);
+   double Amodel = 3 * L1d / (2 * Matom * kBoltzmann * TDebye);
+   double AKM = 0.5 * (1 + sqr(2 * M_PI * T / TDebye) / 6);
+   std::cout << "   L1dual(0) = " << L1d << std::endl;
+   std::cout << "   Amodel = " << Amodel << std::endl;
+   std::cout << "   AKM = " << AKM << std::endl;
+}
+
+double RDdual(double q2, double R)
+{
+   make_hL1dual(R);
+   double log10R = log(R) / log_10;
+   double L1d = hL1dual->Interpolate(log10R);
+   double q2factor = 3 * q2 / (2 * Matom * kBoltzmann * TDebye);
+   if (L1dual0 == 0)
+      L1dual0 = L1dual(0);
+   return R * exp(-q2factor * L1dual0) * (exp(q2factor * L1d) - 1);
+}
+
+TH1D *RDdual_hist(double q2, double Rmax, double Rmin=1e-12, int ndiv=1000)
+{
+   double log10Rmin = log(Rmin) / log_10;
+   double log10Rmax = log(Rmax) / log_10;
+   TH1D *h = new TH1D("hRDdual", "R Ddual(q2,R) vs log10(R)",
+                      ndiv, log10Rmin, log10Rmax);
+   for (int i=0; i < ndiv; ++i) {
+      double R = pow(10, h->GetXaxis()->GetBinCenter(i+1));
+      h->SetBinContent(i+1, RDdual(q2, R));
+   }
+   return h;
+}
+
+void make_hRDdual(double q2, double R, int ndiv=1000)
+{
+   double Rmin;
+   double Rmax;
+   if (hRDdual) {
+      int nbins = hRDdual->GetNbinsX();
+      Rmax = hRDdual->GetXaxis()->GetBinUpEdge(nbins);
+      static double lastq2 = 0;
+      if (lastq2 == q2 && R <= Rmax)
+         return;
+      else
+         delete hRDdual;
+      lastq2 = q2;
+   }
+   Rmax = (R > 1e-9)? R : 1e-9;
+   Rmin = (R < 1e-12)? R : 1e-12;
+   hRDdual = RDdual_hist(q2, Rmax, Rmin, ndiv);
+}
+
+TH1D *htest_hist(TH1D *clone)
+{
+   TH1D *h = (TH1D*)gROOT->FindObject("htest");
+   if (h == 0) {
+      h = (TH1D*)clone->Clone("htest");
+      h->Reset();
+   }
+   return h;
+}
+
+double DQ2(double q2, double Q, int ndiv=1000)
+{
+   double Rconverged = 1e-6;
+   make_hL1dual(Rconverged);
+   make_hRDdual(q2, Rconverged, ndiv);
+   TH1D *htest = htest_hist(hRDdual);
+   int nbins = hRDdual->GetNbinsX();
+   double Q_hbarc = (Q + 1e-50) / hbarc;
+   double Rmin = pow(10, hRDdual->GetXaxis()->GetBinLowEdge(1));
+   double RD_ = RDdual(q2, Rmin);
+   double sum = RD_ * sin(Rmin * Q_hbarc) / (Rmin * Q_hbarc);
+   for (int i=0; i < nbins; ++i) {
+      double R = pow(10, hRDdual->GetXaxis()->GetBinCenter(i+1));
+      double RD = hRDdual->GetBinContent(i+1);
+      double term = (RD - RD_) * cos(R * Q_hbarc);
+      htest->SetBinContent(i+1, term);
+      sum += term;
+      RD_ = RD;
+   }
+   double q2factor = 3 * q2 / (2 * Matom * kBoltzmann * TDebye);
+   return sum / (2 * sqr(M_PI) * hbarc);
+}
+
+TH1D *DQ2_hist(double q2, double Qlimit, int nbins=1000)
+{
+   TH1D *h = new TH1D("hDQ2", "DQ2(q2,Q)", nbins, 0, Qlimit);
+   for (int i=0; i < nbins; ++i) {
+      double Q = Qlimit * (i + 0.5) / nbins;
+      double thisDQ2 = DQ2(q2, Q, nbins * 100);
+      h->SetBinContent(i+1, thisDQ2);
+   }
+   return h;
+}
+
+double MeanNphonons(double q2)
+{
+   double q2factor = 3 * q2 / (2 * Matom * kBoltzmann * TDebye);
+   return q2factor * L1dual(0) / exp(1);
+}
+
+double DQ2_gauss(double q2, double Q)
+{
+   static double dL1dual_dR2 = 0;
+   if (dL1dual_dR2 == 0) {
+      double Rmin = 1e-12;
+      double L1dual_0 = L1dual(0, 100000);
+      double L1dual_Rmin = L1dual(Rmin, 100000);
+      dL1dual_dR2 = 2 * (L1dual_0 - L1dual_Rmin) / (Rmin * Rmin);
+   }
+   double q2factor = 3 * q2 / (2 * Matom * kBoltzmann * TDebye);
+   double sigma2 = 1 / (q2factor * dL1dual_dR2 * sqr(hbarc));
+   double normfact = pow(sigma2 / (2 * M_PI), 1.5);
+   double Q2 = Q * Q;
+   return normfact * Q2 * exp(-sigma2 * Q2 / 2);
+}
+
+void make_hDQ2_gauss(double q2, double Qlimit, int nbins=1000)
+{
+   TH1D *h = new TH1D("hDQ2_gauss", "DQ2_gauss(q2,Q)", nbins, 0, Qlimit);
+   for (int i=0; i < nbins; ++i) {
+      double Q = Qlimit * (i + 0.5) / nbins;
+      double thisDQ2 = DQ2_gauss(q2, Q);
+      h->SetBinContent(i+1, thisDQ2);
+   }
+}
+
+double sample_hkl(int hkl[3], const double u[3])
+{
+   const double hexp = 80.;
+   const double kexp = 80.;
+   const double lexp = 4.;
+   const double log_hexp_factor = log(1 - exp(-1/hexp));
+   const double log_kexp_factor = log(1 - exp(-1/kexp));
+   const double log_lexp_factor = log(1 - exp(-1/lexp));
+   hkl[0] = floor(-hexp * log(fabs(2 * u[0] - 1)));
+   hkl[1] = floor(-kexp * log(fabs(2 * u[1] - 1)));
+   hkl[2] = floor(-lexp * log(fabs(2 * u[2] - 1)));
+   double logwgt = log(8);
+   logwgt += hkl[0] / hexp - log_hexp_factor;
+   logwgt += hkl[1] / kexp - log_kexp_factor;
+   logwgt += hkl[2] / lexp - log_lexp_factor;
+   if (u[0] < 0.5) {
+      hkl[0] = -hkl[0] - 1;
+   }
+   if (u[1] < 0.5) {
+      hkl[1] = -hkl[1] - 1;
+   }
+   if (u[2] < 0.5) {
+      hkl[2] = -hkl[2] - 1;
+   }
+   if (hkl[0] / 2 * 2 == hkl[0]) {
+      int hklsum = hkl[0] + hkl[1] + hkl[2];
+      if (hkl[1] / 2 * 2 != hkl[1] ||
+          hkl[2] / 2 * 2 != hkl[2] ||
+          hklsum / 4 * 4 != hklsum)
+      {
+          return -999;
+      }
+   }
+   else if (hkl[1] / 2 * 2 == hkl[1] || 
+            hkl[2] / 2 * 2 == hkl[2])
+   {
+        return -999;
+   }
+   return logwgt;
+}
+
+int sample_hkl_test(int nsamples, TString rootfile)
+{
+   // Generate a tree consisting of hkl vectors and the associated weight
+   // which can be used to check that the sampling coverage is complete
+   // and that the weights are correct.
+
+   if (fRandom == 0) {
+      std::cerr << "Error in gentree - you must call setseed() "
+                << "to initialize the random number generator "
+                << "before the first call to gentree, giving up."
+                << std::endl;
+      return 0;
+   }
+   std::cout << "first random number is " << fRandom->Uniform() << std::endl;
+
+   TFile treefile(rootfile, "recreate");
+
+   struct treerow {
+      double wgt;
+      int hkl[3];
+   } row;
+
+   TObject *o = gROOT->FindObject("hkl_test");
+   if (o)
+      o->Delete();
+   TTree tree("hkl_test", "hlk test");
+   tree.Branch("wgt", &row.wgt, "wgt/D");
+   tree.Branch("hkl", &row.hkl[0], "hkl[3]/I");
+
+   for (int sample=0; sample < nsamples; ++sample) {
+      double u[3];
+      unif01(3, u);
+      double logwgt = sample_hkl(row.hkl, &u[0]);
+      if (logwgt > -100) {
+         row.wgt = exp(logwgt);
+         tree.Fill();
+      }
+   }
+   tree.Write();
+   return nsamples;
+}
+
+void prepare_sampling()
+{
+   TFile roothistos("phonoZero.root");
+   hDQ2q_high_q2 = (TH2D*)roothistos.Get("hDQ2q_high_q2");
+   hDQ2_low_q2 = (TH2D*)roothistos.Get("hDQ2_low_q2");
+   hDQ2q_high_q2->SetDirectory(0);
+   hDQ2_low_q2->SetDirectory(0);
+}
+
+int gentree(int nsamples, TString rootfile)
+{
+   // Generate coherent bremsstrahlung photons from a sum over
+   // reciprocal lattice vectors, where the gamma radiation is
+   // accompanied by a phonons radiated or absorbed in the
+   // radiator crystal assumed to be in equilibrium at a fixed
+   // temperature T. The results are saved in a root tree.
+
+   if (fRandom == 0) {
+      std::cerr << "Error in gentree - you must call setseed() "
+                << "to initialize the random number generator "
+                << "before the first call to gentree, giving up."
+                << std::endl;
+      return 0;
+   }
+   std::cout << "first random number is " << fRandom->Uniform() << std::endl;
+
+   // Define the vectors that orient the crystal as follows:
+   //  1. (2,2,0) lies in the x-z plane with a small negative z component
+   //  2. (-2,2,0) points close to the y axis with a larger -z component
+   //  3. (0,0,1) points close the the z axis (beam direction)
+
+   double tiltV = asin(qlong_220 / qtotal_220);
+   double tiltH = 0.000; // radians
+   double qUnit = 2*M_PI * hbarc / aLattice;
+   TThreeVectorReal qAxis[3];
+   qAxis[0].SetPolar(qUnit, M_PI/2, 0);
+   qAxis[1].SetPolar(qUnit, M_PI/2, M_PI/2);
+   qAxis[2].SetPolar(qUnit, 0, 0);
+   for (int i=0; i < 3; ++i) {
+      qAxis[i].Rotate(posZhat, +M_PI/4);
+#define DO_PERP 1
+#if DO_PERP
+      qAxis[i].Rotate(posYhat, -tiltH);
+      qAxis[i].Rotate(posXhat, +tiltV);
+#else
+      qAxis[i].Rotate(posXhat, +tiltH);
+      qAxis[i].Rotate(posYhat, -tiltV);
+#endif
+   }
+   TThreeVectorReal q220(2 * qAxis[0] + 2 * qAxis[1]);
+   TThreeVectorReal q_220(-2 * qAxis[0] + 2 * qAxis[1]);
+   std::cout << "direction (2,2,0) is "; (q220 / q220.Length()).Print();
+   std::cout << "direction (-2,2,0) is "; (q_220 / q_220.Length()).Print();
+
+   TFile treefile(rootfile, "recreate");
+
+   struct treerow {
+      double wgt;
+      double logwgts[10];
+      double qphoton[3];
+      double Qphonons[3];
+#ifndef TEST_SAMPLE_DQ2
+      double diffXS;
+      double polar;
+      double k[3];
+      double costhetastar;
+#endif
+      int hkl[3];
+   } row;
+
+   TObject *o = gROOT->FindObject("phono");
+   if (o)
+      o->Delete();
+   TTree tree("phono", "coherent bremsstrahlung with phonons");
+   tree.Branch("wgt", &row.wgt, "wgt/D");
+#ifndef TEST_SAMPLE_DQ2
+   tree.Branch("logwgts", &row.logwgts[0], "logwgts[8]/D");
+#else
+   tree.Branch("logwgts", &row.logwgts[0], "logwgts[5]/D");
+#endif
+   tree.Branch("qphoton", &row.qphoton[0], "qphoton[3]/D");
+   tree.Branch("Qphonons", &row.Qphonons[0], "Qphonons[3]/D");
+#ifndef TEST_SAMPLE_DQ2
+   tree.Branch("diffXS", &row.diffXS, "diffXS/D");
+   tree.Branch("polar", &row.polar, "polar/D");
+   tree.Branch("k", &row.k[0], "k[3]/D");
+   tree.Branch("costhetastar", &row.costhetastar, "costhetastar/D");
+#endif
+   tree.Branch("hkl", &row.hkl[0], "hkl[3]/I");
+
+   TLepton eIn(mElectron), eOut(mElectron);
+   TPhoton gOut;
+
+   AdaptiveSampler sampler(8, &unif01);
+   sampler.restoreState("phonoZero.astate");
+   sampler.setVerbosity(2);
+   sampler.reset_stats();
+
+   for (int sample=0; sample < nsamples; ++sample) {
+      double u[8];
+      double logwgts[10] = {};
+      logwgts[0] = log(sampler.sample(u));
+      logwgts[1] = sample_hkl(row.hkl, &u[0]);
+      double logwgt = logwgts[0] + logwgts[1];
+      if (logwgt < -99) {
+         sampler.feedback(u,0);
+         continue;
+      }
+      TThreeVectorReal qLattice;
+      qLattice = row.hkl[0] * qAxis[0] + 
+                 row.hkl[1] * qAxis[1] +
+                 row.hkl[2] * qAxis[2];
+
+      // The section where Qphonons is generated has been suppressed
+      // in this version of the code. Here the phonon momentum is forced
+      // to zero, and the photon must match the lattice vector exactly.
+
+      double kmin = 1.0; // low-energy cutoff in bremsstrahlung spectrum (GeV)
+      TFourVectorReal qphoton(0, qLattice);
+
+      // Apply the Debye-Waller factor
+
+      double q2factor = -qphoton.InvariantSqr();
+      q2factor *= 3 / (2 * Matom * kBoltzmann * TDebye);
+      if (L1dual0 == 0)
+         L1dual0 = L1dual(0);
+      logwgt += logwgts[4] = -q2factor * L1dual0;
+      if (logwgt < -99) {
+         sampler.feedback(u,0);
+         continue;
+      }
+
+      row.qphoton[0] = qphoton[1];
+      row.qphoton[1] = qphoton[2];
+      row.qphoton[2] = qphoton[3];
+      row.Qphonons[0] = 0;
+      row.Qphonons[1] = 0;
+      row.Qphonons[2] = 0;
+
+#ifndef TEST_SAMPLE_DQ2
+
+      // So far we have generated the total 4-momentum of the final
+      // photon-electron system. Now we need to generate the angles
+      // for its "decay", which is best done in the rest frame.
+ 
+      TFourVectorReal pin(Ebeam, 0, 0, pbeam);
+      TFourVectorReal ptot(pin + qphoton);
+      double M2 = ptot.InvariantSqr();
+      if (M2 < sqr(mElectron)) {
+         sampler.feedback(u,0);
+         continue;
+      }
+      double kstar = (M2 - sqr(mElectron)) / (2 * sqrt(M2));
+
+      // In the comments in TCrossSection::Bremsstralhung I read the following:
+      //   "To get a simple expression for the density of final states,
+      //    I redefined the solid angle for the outgoing photon around
+      //    the momentum axis of the final electron+photon, rather than
+      //    the incoming electron direction."
+      // To be consistent with this, I need to make sure the azimuthal angle
+      // I generate is with respect to the ptot axis, not the beam axis. The
+      // jacobian for this is dk / dcosthetastar = gammastar betastar kstar.
+ 
+      double phistar = u[7] * 2*M_PI;
+      double thetastar = acos(u[6] * 2 - 1);
+      TThreeVectorReal khat = ptot / ptot.Length();
+      TThreeVectorReal ihat(-khat[3], 0, khat[1]);
+      TThreeVectorReal jhat(khat);
+      jhat.Cross(ihat);
+      TThreeVectorReal uhat(sin(thetastar) * cos(phistar) * ihat +
+                            sin(thetastar) * sin(phistar) * jhat +
+                            cos(thetastar) * khat);
+      TFourVectorReal kout(kstar, kstar * uhat);
+      TThreeVectorReal beta(-(TThreeVector)ptot / ptot[0]);
+      kout.Boost(beta);
+      if (kout[0] < kmin) {
+         sampler.feedback(u,0);
+         continue;
+      }
+      double jacob = ptot.Length() * kstar / sqrt(M2);
+      logwgts[5] = log(jacob * 4*M_PI);
+      logwgt += logwgts[5];
+      if (logwgt < -99) {
+         sampler.feedback(u,0);
+         continue;
+      }
+
+      row.k[0] = kout[1];
+      row.k[1] = kout[2];
+      row.k[2] = kout[3];
+      row.costhetastar = cos(thetastar);
+
+      // compute the differential cross section, polarization
+ 
+      TFourVectorReal pout(ptot - kout);
+      eIn.SetMom(pin);
+      eOut.SetMom(pout);
+      gOut.SetMom(kout);
+      eIn.SetPol(zeroVector);
+      eOut.AllPol();
+      gOut.AllPol();
+      row.diffXS = TCrossSection::Bremsstrahlung(eIn, eOut, gOut);
+      gOut.SetPol(uhat.SetPolar(1, M_PI/2., -kout.Phi()));
+      row.polar = TCrossSection::Bremsstrahlung(eIn, eOut, gOut);
+      row.polar /= row.diffXS;
+
+      // include the atomic and crystal form factors
+      double Z = 6;
+      double Sff = (row.hkl[0] / 2 * 2 == row.hkl[0])? 8 : 8 / sqrt(2);
+      double betacut = 111 * pow(Z, -1/3.) / mElectron;
+      double Fff = 1 / (1 + sqr(betacut) * qphoton.LengthSqr());
+      double XffSqr_d3q = pow(2 * PI_ * hbarc, 3) / Vcell;
+      row.diffXS *= sqr(Sff) * sqr(Z) * sqr(1 - Fff) * XffSqr_d3q;
+
+#endif
+
+      double wgt = exp(logwgt);
+      for (int i=0; i < 10; i++)
+         row.logwgts[i] = logwgts[i];
+      row.wgt = wgt;
+      if (!std::isfinite(wgt)) {
+         std::cerr << "phonoZero warning: found infinite or undefined wgt,"
+                   << " discarding the following event:" << std::endl
+                   << "  wgt = " << row.wgt << std::endl
+                   << "  logwgts = " 
+                   << row.logwgts[0] << ", "
+                   << row.logwgts[1] << ", "
+                   << row.logwgts[2] << ", "
+                   << row.logwgts[3] << ", "
+                   << row.logwgts[4] << ", "
+                   << row.logwgts[5] << ", "
+                   << row.logwgts[6] << ", "
+                   << row.logwgts[7] << ", "
+                   << row.logwgts[8] << ", "
+                   << row.logwgts[9] << std::endl
+                   << "  hkl = "
+                   << row.hkl[0] << ", " << row.hkl[1] << ", " << row.hkl[2]
+                   << "  qphoton = " 
+                   << row.qphoton[0] << ", " 
+                   << row.qphoton[1] << ", "
+                   << row.qphoton[2] << std::endl
+                   << "  Qphonons = " 
+                   << row.Qphonons[0] << ", " 
+                   << row.Qphonons[1] << ", " 
+                   << row.Qphonons[2] << std::endl
+#ifndef TEST_SAMPLE_DQ2
+                   << "  diffXS = "
+                   << row.diffXS << ", polar = "
+                   << row.polar << std::endl
+                   << "  k = "
+                   << row.k[0] << ", "
+                   << row.k[1] << ", "
+                   << row.k[2] << std::endl
+                   << std::endl
+                   << "  costhetastar = " << row.costhetastar
+#endif
+                   << std::endl;
+         wgt = 0;
+      }
+
+#ifndef TEST_SAMPLE_DQ2
+
+      // feedback to the sampler
+      sampler.feedback(u, row.diffXS * wgt);
+
+      // apply a minimum cut on wgt * diffXS for saving this event
+ 
+      double thisPfactor = wgt * row.diffXS;
+      if (thisPfactor == 0) {
+         continue;
+      }
+#define MIN_PFACTOR 1e7
+#ifdef MIN_PFACTOR
+      else if (thisPfactor < MIN_PFACTOR) {
+         double uu = fRandom->Uniform();
+         if (uu > thisPfactor / MIN_PFACTOR)
+            continue;
+         row.wgt = MIN_PFACTOR / row.diffXS;
+      }
+#endif
+
+#endif
+
+      tree.Fill();
+   }
+   tree.Write();
+   std::cout << "sampler reports efficiency " << sampler.getEfficiency()
+             << std::endl;
+   TString statefile(rootfile);
+   statefile.ReplaceAll(".root", ".astate");
+   sampler.saveState(statefile.Data());
+   return nsamples;
+}

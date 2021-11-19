@@ -1,0 +1,10 @@
+fNdim=8
+fSampling_threshold=25
+fMaximum_depth=30
+fMaximum_cells=1000000
+fEfficiency_target=0.9
+=
+ndim=8
+divAxis=-1
+subset=1
+=

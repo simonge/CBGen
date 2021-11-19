@@ -1,0 +1,3 @@
+BeamEnergy 12
+MinEnergy  1
+PeakEnergy 9

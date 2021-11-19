@@ -1,0 +1,59 @@
+#include <sys/stat.h>
+#include <unistd.h>
+#include <iostream>
+
+#include <TROOT.h>
+#include <TProof.h>
+#include <TChain.h>
+#include <TString.h>
+#include <TFile.h>
+#include <TMacro.h>
+#include <TH2D.h>
+
+#define DOING_PROOF 1
+#define ASYNC_PROOF 1
+
+TString proofserver("np-sigma.physics.gla.ac.uk/?N");
+TString workdir("/w/work1/home/simong/CBremGen/TestFiles/");
+
+TChain * phonochain(int nbegin=0, int nend=100)
+{
+   TChain *ch = new TChain("phono");
+   for (int i=nbegin; i < nend; ++i) {
+      TString filename;
+      struct stat statbuf;
+      filename.Form(workdir + "Events_%d.root", i);
+      if (stat(filename.Data(), &statbuf) == 0)
+         ch->Add(filename);
+      else
+         std::cerr << filename.Data() << " not found" << std::endl;
+   }
+   return ch;
+}
+
+void proof()
+{
+   TChain *ch=phonochain();
+   
+   bool eebremsflag = false;
+   
+#if DOING_PROOF
+   if (gProof == 0) {
+//       TProof::Open(proofserver);
+      TProof::Open("", "workers=16");
+      gProof->SetParameter("PROOF_Packetizer", "TPacketizer");
+      gProof->SetParameter("PROOF_MaxSlavesPerNode", (Int_t)9);
+   }
+   gProof->Load("phonopolar.C+O");
+   ch->SetProof();
+#else
+   gROOT->ProcessLine(".L phonopolar.C+O");
+#endif
+   ch->Process("phonopolar", "");
+
+#if DOING_PROOF
+   if (gProof == 0) {
+      gProof->Close();
+   }
+#endif
+}

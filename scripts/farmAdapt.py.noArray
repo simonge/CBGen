@@ -1,0 +1,105 @@
+#!/usr/bin/python
+
+import os
+import sys
+import subprocess
+import glob
+import time
+
+#---------------------------------------------------------------
+#Script to run through data files creating weight files
+#-----------------------------------------------------------------
+
+outBase = "/w/work5/home/simong/CBremGen/Adapt/"
+os.environ['OutBase'] = outBase
+
+seedStart        = 2114
+nStart           = 0
+nRepeats         = 3 #400
+nFiles           = 4 #100
+maxq             = 300
+number           = 10000 #500000
+beamSettings     = "/home/simong/Generators/GlueXCB/setup/MainzSettings.txt"
+#beamSettings     = "/home/simong/Generators/GlueXCB/setup/GlueXSettings.txt"
+radiatorSettings = "/home/simong/Generators/GlueXCB/setup/Diamond.txt"
+base             = "Diamond4"
+adaptBase        = "sampler"
+
+    
+outDirectory = outBase + base + "/"
+if not os.path.exists(outDirectory):
+    os.makedirs(outDirectory)
+    
+os.environ['OutMain'] = outDirectory    
+
+os.environ['sampler'] = adaptBase
+if(nStart!=0):
+    os.environ['sampler'] = adaptBase + "_" + str(nStart-1)
+    
+os.environ['radiatorSettings'] = radiatorSettings
+os.environ['beamSettings']     = beamSettings
+os.environ['Number']           = str(number)
+    
+jobprocessed = 0
+jobcount     = 0
+
+for j in range(nStart,nRepeats):
+
+    repeatDir = outDirectory + "Repeat_" + str(j) + "/"
+
+    if not os.path.exists(repeatDir):
+        os.makedirs(repeatDir)
+
+    os.environ['OutDir']  = repeatDir
+    
+    
+    for i in range(0,nFiles):
+        seed = seedStart+i+j*nFiles
+        os.environ['Seed'] = str(seed)
+        
+        outFile = "Events_"+str(seed)+".root"
+        os.environ['OutFile'] = outFile
+        
+        if os.path.exists(repeatDir + outFile):
+            print("file exists")
+            continue
+        
+        jobprocessed+=1
+        #subprocess.call(["/home/simong/Generators/GlueXCB/scripts/jobAdapt.py"],env=dict(os.environ))
+        subprocess.call(["qsub", "-t", "1-5", "/home/simong/Generators/GlueXCB/scripts/jobAdapt.py"],env=dict(os.environ))
+        #time.sleep(0.01)
+        #jobcount = subprocess.check_output(["qstat | grep \'R\|Q\'"], shell=True).count(os.environ['USER'])
+        #print jobcount
+        #while jobcount>maxq:
+        #    time.sleep(1)
+        #    jobcount = subprocess.check_output(["qstat | grep \'R\|Q\'"], shell=True).count(os.environ['USER'])
+
+
+        for log in glob.glob("/home/simong/Generators/GlueXCB/scripts/Adapter.*"):
+            subprocess.call(["rm",log])
+    if subprocess.check_output(["qstat"], shell=True):
+        jobcount = subprocess.check_output(["qstat | grep \'R\|Q\'"], shell=True).count("Adapter")
+    else:
+        jobcount = 0
+        
+    while jobcount>0:
+        time.sleep(1)
+        if subprocess.check_output(["qstat"], shell=True):
+            jobcount = subprocess.check_output(["qstat | grep \'R\|Q\'"], shell=True).count("Adapter")
+        else:
+            jobcount = 0
+
+    os.environ['sampler'] = adaptBase+"_" + str(j)
+
+    samplerOut = outDirectory+os.environ['sampler']+".astate"
+    
+    if os.path.exists(samplerOut):
+        print("sampler exists")
+        continue
+    
+    pro = subprocess.call(["/home/simong/Generators/GlueXCB/build/Adapt","-d",repeatDir,"-o",samplerOut])
+    
+    
+
+print 'All Done'
+

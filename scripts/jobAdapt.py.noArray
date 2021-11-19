@@ -1,0 +1,44 @@
+#!/usr/bin/python
+#PBS -N Adapter
+#PBS -V 
+#PBS -l walltime=999:00:00,file=20000000kb
+#PBS -t 1-3
+
+import os
+import subprocess
+import glob
+
+#---------------------------------------------------------------
+#Script to run through data files creating weight files
+#-----------------------------------------------------------------
+
+seed        = os.environ['Seed']
+outFolder   = os.environ['OutDir']
+outMain     = os.environ['OutMain']
+outFile     = os.environ['OutFile']
+number      = os.environ['Number']
+beamFile    = os.environ['beamSettings']
+targetFile  = os.environ['radiatorSettings']
+adapterBase = os.environ['sampler']
+
+adapterFile = adapterBase+".astate"
+adapterOut  = adapterBase+str(seed)+".astate"
+
+#Directorys
+ProcessingDir = "/scratch/simong/"
+if not os.path.exists(ProcessingDir):
+    os.makedirs(ProcessingDir)
+
+if os.path.exists(outMain+adapterFile):
+    subprocess.call(["cp", outMain+adapterFile, ProcessingDir+adapterFile])
+
+subprocess.call(["/home/simong/Generators/GlueXCB/CBGen", "-d", ProcessingDir, "-f", outFile, "-s", seed, "-n", number, "-b", beamFile, "-t", targetFile, "-a", adapterFile])
+
+subprocess.call(["cp", ProcessingDir+outFile, outFolder+outFile])
+subprocess.call(["cp", ProcessingDir+adapterOut, outFolder+adapterOut])
+
+subprocess.call(["rm", ProcessingDir+outFile])
+subprocess.call(["rm", ProcessingDir+adapterOut])
+subprocess.call(["rm", ProcessingDir+adapterFile])
+
+print "DONE"

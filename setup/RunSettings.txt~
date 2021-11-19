@@ -1,0 +1,11 @@
+Repeats          1
+Seed             14
+EventN           500000
+OutDirectory     /scratch/simong/
+OutFile          testBad3.root
+#BeamSettings     setup/GlueXSettings.txt
+BeamSettings     setup/MainzSettings.txt
+RadiatorSettings setup/Copper.txt
+#RadiatorSettings setup/Diamond.txt
+AdapterFile      /scratch/simong/testBad.astate
+#AdapterFile      /w/work5/home/simong/CBremGen/Adapt/Diamond5/sampler_47.astate

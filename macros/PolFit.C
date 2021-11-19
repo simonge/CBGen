@@ -1,0 +1,336 @@
+#include "TH1.h"
+#include "TH2.h"
+#include "TFile.h"
+#include "TTree.h"
+#include "TLorentzVector.h"
+#include "TClonesArray.h"
+#include "TChain.h"
+#include "TCanvas.h"
+#include <iostream>
+#include <fstream>
+
+#include "RooDataHist.h"
+#include "RooHistPdf.h"
+#include "RooProdPdf.h"
+#include "RooAddPdf.h"
+#include "RooAbsData.h"
+#include "RooGenericPdf.h"
+#include "RooGaussian.h"
+#include "RooProjectedPdf.h"
+#include "RooRealVar.h"
+#include "RooPlot.h"
+#include "RooExtendPdf.h"
+#include "RooFormulaVar.h"
+
+using namespace std;
+
+// use this order for safety on library loading
+using namespace RooFit ;
+//using namespace RooStats ;
+
+//Constants
+const Double_t B = 0.247892436;  //where did I get that ? Timm ?
+const Double_t A = 0.03;         //made up for now, need to get the actual no for this later
+const Double_t k = 26.5601;      //put in formula for k later (my own stonehenge paper)
+
+//Experimental variables
+const Double_t beamMeV = 1.6;
+const Double_t edgeMeV = 0.500;
+const Double_t eMin    = 0.100;
+const Double_t eMax    = 1.600;
+const Double_t spreadMeV = 0.010;
+const Double_t colliDist_m = 2.5;
+const Double_t colliRad_mm = 3;
+
+//Number of vectors to fit
+Int_t nVec=2;
+
+void PolFit( TString inputFile = "outPlotsTemp0.root", TString outFile = "PolPlots1000.root"){
+  //void PolFit( TString inputFile = "/w/work1/home/simong/PolOut/All.root", TString outFile = "/w/work1/home/simong/PolFitTest2.root"){
+
+  Double_t Baseline = 1.06;
+
+  //Open input files
+  TFile*  iFile   = new TFile(inputFile,"read"    );
+  TFile*  oFile   = new TFile(outFile,  "recreate");
+
+
+  //Histogram Projections
+  TH1D*    hTempEG      = (TH1D*)iFile->Get("polhist");
+  TH1D*    hTempAmor    = (TH1D*)iFile->Get("amohist");
+  TH1D*    hLine        = (TH1D*)hTempAmor->Clone("LineHist");
+
+//   hTempEG->Reset();
+//   hTempAmor->Reset();
+  hLine->Reset();
+
+  for (Int_t i=0;i<=hLine->GetNbinsX();i++){
+
+    hLine->SetBinContent(i,0);
+
+  }
+
+  TH1D*    hTempEnh = (TH1D*)hTempEG->Clone("TempEnh");
+  hTempEnh->Divide(hTempEG,hTempAmor);
+
+  //Set initial parameters
+  Double_t Theta  = k/(2*beamMeV*beamMeV*((1/edgeMeV)-(1/beamMeV)));                                  //theta from edge and beam energy
+  Double_t Sigma  = (Theta-(k/(2*beamMeV*beamMeV*((1/(edgeMeV-spreadMeV))-(1/beamMeV)))))/3.0;   //spread in theta from spread in edge 
+  Double_t ThetaR = beamMeV*0.001*5.0*colliRad_mm/colliDist_m;                         //cut from collimator
+  Double_t SigmaR = ThetaR*Sigma/Theta;                            //smear in above same fractional sigma as above
+
+  //Polarisation fit constants
+  RooRealVar   kVar("kVar","kVar",k);
+  RooRealVar   EVar("EVar","EVar",beamMeV);
+
+  //Variable being fit
+  //    RooRealVar    TaggE("TaggE","TaggE",75,1410);
+  //  RooRealVar    TaggE("TaggE","TaggE",400,750);
+  RooRealVar    TaggE("TaggE","TaggE",eMin,eMax);
+  RooFormulaVar x("x","x","(TaggE/EVar)",RooArgList(TaggE,EVar));
+  RooFormulaVar amo("amo","amo","1/x",RooArgList(x));
+  //  RooFormulaVar x("x","x","TaggE/EVar",RooArgList(TaggE,EVar));
+
+  //Amorphous contribution
+  RooDataHist *roo_hisEG   = new RooDataHist("EGHis","EGHis",TaggE,hTempEG);
+  //create a pdf from the RooFit histogram
+  RooHistPdf  *roo_PDFEG   = new RooHistPdf("Coh","Coh",TaggE,*roo_hisEG);
+
+  //Amorphous contribution
+  RooDataHist *roo_hisAmor = new RooDataHist("AmorHis","AmorHis",TaggE,hTempAmor);
+  //create a pdf from the RooFit histogram
+  RooHistPdf  *roo_PDFAmor = new RooHistPdf("Amor","Amor",TaggE,*roo_hisAmor);
+
+  RooDataHist *Line        = new RooDataHist("Line","Line",TaggE,hLine);
+
+  RooRealVar  RATIO("Ratio","Ratio",1.5,0.01,100);
+
+  //  RooFormulaVar Enhance("Enahnce","Enahnce","Coh/Amor*ratio",RooArgList(*roo_hisAmor,*roo_hisEG,RATIO));
+
+  //  RooGenericPdf EnhD("EnhD","EnhD","Enhance",RooArgList(Enhance));
+  RooFormulaVar  EnhD("EnhD","EnhD","Coh/Amor*Ratio-1",RooArgList(*roo_PDFAmor,*roo_PDFEG,RATIO));
+
+  //Polarisation fit variables
+  RooRealVar   THETA("Theta","Theta",Theta-20*Sigma,Theta+20*Sigma);
+  RooRealVar   THETAR("ThetaR","ThetaR",ThetaR*2,0.2*ThetaR,ThetaR*2);
+  RooRealVar   SIGMA("Sigma","Sigma",5*Sigma,Sigma,Sigma*15);
+  RooRealVar   SIGMAR("SigmaR","SigmaR",SigmaR*0.5,0.1*SigmaR,SigmaR*20);
+//   RooRealVar   THETA("Theta","Theta",0.00648);
+//   RooRealVar   THETAR("ThetaR","ThetaR",9.048);
+//   RooRealVar   SIGMA("Sigma","Sigma",0.00022);
+//   RooRealVar   SIGMAR("SigmaR","SigmaR",0.309);
+
+//  RooRealVar   IVEC1("IVec1","IVec1", 1.17); 
+  //  RooRealVar   IVEC2("IVec2","IVec2", 0.2937); 
+//   RooRealVar   IVEC1("IVec1","IVec1", 0.8, 0.1, 1.5); 
+//   RooRealVar   IVEC2("IVec2","IVec2", 0.2, 0.1, 1.5); 
+  Double_t egRange = eMax-eMin;
+  RooRealVar   IVEC1("IVec1","IVec1", 0.2, 0.01, 1.5); 
+  RooRealVar   IVEC2("IVec2","IVec2", 0.12, 0.01, 1.5); 
+
+  //Angle variable
+  RooRealVar   ThetaMean("ThetaMean","ThetaMean",Theta,Theta*0.9,Theta*1.2);
+  //  RooRealVar   Angle("Angle","Angle",-3,3);
+  //  RooRealVar   Angle("Angle","Angle",-0.1,0.1);
+  //  RooRealVar   Angle("Angle","Angle",-0.1,0.1);
+  //  RooFormulaVar   RadAngle("RadAngle","RadAngle","Theta",RooArgList(THETA));
+  //  RooFormulaVar   RadAngle("RadAngle","RadAngle","Theta-Angle*Sigma",RooArgList(Angle,THETA,SIGMA));
+//   RooRealVar   RadAngle("RadAngle","RadAngle",Theta-3*Sigma,Theta+3*Sigma);
+  RooGaussian  AngleWeight("AngleWeight","AngleWeight",THETA,ThetaMean,SIGMA);
+  
+  RooFormulaVar xd1("xd1","xd1","1/((kVar/(2*EVar*Theta))+1)",RooArgList(THETA,kVar,EVar));
+  RooFormulaVar xd2("xd2","xd2","1/((kVar/(4*EVar*Theta))+1)",RooArgList(THETA,kVar,EVar));
+
+  RooFormulaVar x1("x1","x1","(x>xd1 ? 0.0 : x)",RooArgList(x,xd1));
+  RooFormulaVar x2("x2","x2","(x>xd2 ? 0.0 : x)",RooArgList(x,xd2));
+
+  RooFormulaVar xc1("xc1","xc1","xd1/(1+((ThetaR*ThetaR)*(1-xd1)))",RooArgList(THETAR,xd1));
+  RooFormulaVar xc2("xc2","xc2","xd2/(1+((ThetaR*ThetaR)*(1-xd2)))",RooArgList(THETAR,xd2));
+
+  RooFormulaVar Q1("Q1","Q1","(1-xd1)/xd1",RooArgList(xd1));
+  RooFormulaVar Q2("Q2","Q2","(1-xd2)/xd2",RooArgList(xd2));
+
+  RooFormulaVar Phi1("Phi1","Phi1","(2*Q1*Q1*x1*x1)/((1-x1)*(1+((1-x1)*(1-x1))-((4*Q1*Q1*x1*x1/(1-x1))*(((1-x1)/(Q1*x1))-1))))",RooArgList(Q1,x1));
+  RooFormulaVar Phi2("Phi2","Phi2","(2*Q2*Q2*x2*x2)/((1-x2)*(1+((1-x2)*(1-x2))-((4*Q2*Q2*x2*x2/(1-x2))*(((1-x2)/(Q2*x2))-1))))",RooArgList(Q2,x2));
+  RooFormulaVar Chi1("Chi1","Chi1","((Q1*Q1*x1)/(1-x1))*(1+((1-x1)*(1-x1))-((4*Q1*Q1*x1*x1/(1-x1))*(((1-x1)/(Q1*x1))-1)))",RooArgList(Q1,x1));
+  RooFormulaVar Chi2("Chi2","Chi2","((Q2*Q2*x2)/(1-x2))*(1+((1-x2)*(1-x2))-((4*Q2*Q2*x2*x2/(1-x2))*(((1-x2)/(Q2*x2))-1)))",RooArgList(Q2,x2));
+  //   RooFormulaVar Chi1("Chi1","Chi1","((Q1*Q1*x)/(1-x))*(1+((1-x)*(1-x))-((4*Q1*Q1*x*x/(1-x))*(((1-x)/(Q1*x))-1)))",RooArgList(Q1,x));
+  //   RooFormulaVar Chi2("Chi2","Chi2","((Q2*Q2*x)/(1-x))*(1+((1-x)*(1-x))-((4*Q2*Q2*x*x/(1-x))*(((1-x)/(Q2*x))-1)))",RooArgList(Q2,x));
+  
+  //Additional *x in Chi?
+
+  RooFormulaVar CohCont1("CohCont1","CohCont1","Chi1*0.5*(1+TMath::Erf((x1-xc1)/(TMath::Sqrt(2)*SigmaR)))",RooArgList(Chi1,x1,xc1,SIGMAR));
+  RooFormulaVar CohCont2("CohCont2","CohCont2","Chi2*0.5*(1+TMath::Erf((x2-xc2)/(TMath::Sqrt(2)*SigmaR)))",RooArgList(Chi2,x2,xc2,SIGMAR));
+
+//   RooExtendPdf  CohCont1e("CohCont1e","CohCont1e",CohCont1,IVEC1);
+//   RooExtendPdf  CohCont2e("CohCont2e","CohCont2e",CohCont2,IVEC2);
+
+  RooFormulaVar PhiCont1("PhiCont1","PhiCont1","CohCont1*Phi1",RooArgList(CohCont1,Phi1));
+  RooFormulaVar PhiCont2("PhiCont2","PhiCont2","CohCont2*Phi2",RooArgList(CohCont2,Phi2));
+
+//   RooExtendPdf  PhiCont1e("PhiCont1e","PhiCont1e",PhiCont1,IVEC1);
+//   RooExtendPdf  PhiCont2e("PhiCont2e","PhiCont2e",PhiCont2,IVEC2);
+
+//   RooFormulaVar CohCont1("CohCont1","CohCont1","Chi1*IVec1*0.5*(1+TMath::Erf((x-xc1)/(TMath::Sqrt(2)*SigmaR)))",RooArgList(Chi1,IVEC1,x,xc1,SIGMAR));
+//   RooFormulaVar CohCont2("CohCont2","CohCont2","Chi2*IVec2*0.5*(1+TMath::Erf((x-xc2)/(TMath::Sqrt(2)*SigmaR)))",RooArgList(Chi2,IVEC2,x,xc2,SIGMAR));
+
+  RooFormulaVar CohTotal("CohTotal","CohTotal","CohCont1*IVec1+CohCont2*IVec2",RooArgList(CohCont1,CohCont2,IVEC1,IVEC2));
+  RooFormulaVar PhiTotal("PhiTotal","PhiTotal","PhiCont1*IVec1+PhiCont2*IVec2",RooArgList(PhiCont1,PhiCont2,IVEC1,IVEC2));
+  //  RooFormulaVar CohTotal("CohTotal","CohTotal","CohCont1*IVec1+CohCont2*IVec2",RooArgList(CohCont1,CohCont2,IVEC1,IVEC2));
+//   RooFormulaVar PhiTotal("PhiTotal","PhiTotal","PhiCont1*IVec1+PhiCont2*IVec2",RooArgList(PhiCont1,PhiCont2,IVEC1,IVEC2));
+//  RooAddPdf     CohTotal("CohTotal","CohTotal",RooArgList(CohCont1e,CohCont2e));
+//   RooAddPdf     PhiTotal("PhiTotal","PhiTotal",RooArgList(PhiCont1e,PhiCont2e));
+  RooFormulaVar PolTotal("PolTotal","PolTotal","CohTotal*PhiTotal",RooArgList(CohTotal,PhiTotal));
+  //  RooGenericPdf ITotal("ITotal","ITotal","CohProj+amo",RooArgList(CohTotal,amo));
+//   RooFormulaVar PhiTotal("PhiTotal","PhiTotal","CohCont1*Phi1*IVec1+CohCont2*Phi2*IVec2",RooArgList(CohCont1,CohCont2,Phi1,Phi2,IVEC1,IVEC2));
+//  RooGenericPdf CohTotal("CohTotal","CohTotal","CohCont1",RooArgList(CohCont1));
+//   RooGenericPdf CohTotal("CohTotal","CohTotal","CohCont1+CohCont2",RooArgList(CohCont1,CohCont2));
+//  RooGenericPdf PhiTotal("PhiTotal","PhiTotal","(CohCont1*Phi1+CohCont2*Phi2)/(CohCont1+CohCont2)",RooArgList(CohCont1,CohCont2,Phi1,Phi2));
+
+  RooFormulaVar    CohProd("CohProd","CohProd","CohTotal*AngleWeight/amo",RooArgList(CohTotal,AngleWeight,amo));
+  RooFormulaVar    PolProd("PolProd","PolProd","PolTotal*AngleWeight",RooArgSet(PolTotal,AngleWeight));
+//  RooProdPdf    CohProd("CohProd","CohProd",RooArgSet(CohTotal,AngleWeight));
+//   RooProdPdf    PolProd("PolProd","PolProd",RooArgSet(PolTotal,AngleWeight));
+
+  //  RooFormulaVar CohProj("CohProj","RooAbsReal::createPlotProjection(CohProd,Theta)",RooArgList(CohProd,THETA)); 
+  RooProjectedPdf PolProj("PolProj","PolProj",PolProd,RooArgSet(THETA));
+  //  RooProjectedPdf CohProj("CohProj","CohProj",CohProd,THETA);
+  RooProjectedPdf CohProj("CohProj","CohProj",CohProd,RooArgSet(THETA));
+//   RooProjectedPdf PhiProj("PhiProj","PhiProj",PhiProd,RooArgSet(x));
+//   RooProjectedPdf CohProj("CohProj","CohProj",CohProd,RooArgSet(Angle));
+//   RooProjectedPdf PolProj("PolProj","PolProj",PolProd,RooArgSet(THETA));
+  
+//   RooRealVar      a_Yield("AmoYield","fitted yield for amorphous contribution",1,0.,1) ; 
+//   RooRealVar      c_Yield("CohYield","fitted yield for amorphous contribution",0.22,0.,1) ; 
+
+  RooRealVar      Yield("Yield","Yield",10,0.,1000000000);
+  RooFormulaVar   Enhancement("Enhancement","Enhancement","CohProj*Yield",RooArgList(CohProj,Yield));
+
+//   RooRealVar      a_Yield("AmoYield","fitted yield for amorphous contribution",10000,0.,10000000) ; 
+//   RooRealVar      c_Yield("CohYield","fitted yield for amorphous contribution",4000,0.,10000000) ; 
+
+  RooRealVar      a_Yield("AmoYield","fitted yield for amorphous contribution",10000,0.,10000000) ; 
+  RooRealVar      c_Yield("CohYield","fitted yield for amorphous contribution",4000,0.,10000000) ; 
+
+  //  RooGenericPdf Enhancement("Enhancement","Enhancement","(CohProj*Amor)",RooArgList(CohProj,*roo_PDFAmor));
+  //  RooAddPdf Enhancement("Enhancement","Enhancement",CohProj2);
+  RooFormulaVar Polarisation("Polarisation","Polarisation","PolProj/CohProj",RooArgList(PolProj,CohProj));
+  //  RooGenericPdf Enhancement("Enhancement","Enhancement","CohProd/amo",RooArgList(CohProd,amo));
+
+//   RooGenericPdf EnhD2("EnhD2","EnhD2","1/EnhD",RooArgList(EnhD));
+  //  RooProdPdf model("NullPdf","NullPdf",RooArgList(Enhancement,EnhD2));
+  //  RooAddPdf model("NullPdf","NullPdf",RooArgList(Enhancement,EnhD),RooArgList(c_Yield,a_Yield));
+  RooGenericPdf model("NullPdf","NullPdf","Enhancement-EnhD+1",RooArgList(Enhancement,EnhD));
+  //  RooFormulaVar model("NullPdf","NullPdf","Enhancement-EnhD",RooArgList(Enhancement,EnhD));
+  //  RooAddPdf       model("SumPdf","SumPdf",RooArgList(CohProj,*roo_PDFAmor),RooArgList(c_Yield,a_Yield));
+  //  RooAddPdf       model("SumPdf","SumPdf",RooArgList(Enhancement,*roo_PDFAmor),RooArgList(c_Yield,a_Yield));
+  //  RooProdPdf       model("SumPdf","SumPdf",RooArgList(CohProj,*roo_PDFAmor));
+  //  RooAddPdf       model("SumPdf","SumPdf",RooArgList(Enhancement,*roo_PDFAmor),RooArgList(c_Yield,a_Yield));
+
+  cout << a_Yield.getVal() <<  " " << c_Yield.getVal() << endl << endl << endl << endl << endl << endl;
+
+  model.fitTo(*Line, NumCPU(8));
+  //  model.fitTo(*roo_hisEG, NumCPU(8));
+  cout << a_Yield.getVal() <<  " " << c_Yield.getVal() << endl << endl << endl << endl << endl << endl;
+
+  //Draw some Test things
+  TCanvas *genCanvas = new TCanvas("genCanvas","genCanvas",5,5,1405,905);
+  genCanvas->Divide(4,3);
+  genCanvas->cd(1);
+  RooPlot *frameX = TaggE.frame();
+  roo_PDFAmor->plotOn(frameX,LineStyle(kDashed), LineColor(kRed));
+  frameX->Draw();
+
+  genCanvas->cd(2);
+  RooPlot *frameX2 = TaggE.frame();
+  roo_hisEG->plotOn(frameX2);
+  frameX2->Draw();
+
+  genCanvas->cd(3);
+  RooPlot *frameX3 = TaggE.frame();
+  //  Line->plotOn(frameX3);
+  model.plotOn(frameX3);
+//   model.plotOn(frameX3,Components(Enhancement),LineStyle(kDashed),LineColor(kGreen));
+//   //   model.plotOn(frameX3,Components(*roo_PDFAmor),LineStyle(kDashed),LineColor(kGreen));
+//   //   model.plotOn(frameX3,Components(CohTotal),LineStyle(kDashed),LineColor(kRed));
+//   model.plotOn(frameX3,Components(EnhD),LineStyle(kDashed),LineColor(kRed));
+  frameX3->Draw();
+
+  genCanvas->cd(4);
+  RooPlot *frameX4 = TaggE.frame();
+  //  PhiProj.plotOn(frameX4);
+  //  CohTotal.plotOn(frameX4);
+  CohProj.plotOn(frameX4,LineStyle(kDashed),LineColor(kRed));
+  //  CohProj2.plotOn(frameX4,LineStyle(kDashed),LineColor(kBlue));
+  //  CohCont2.plotOn(frameX4,LineStyle(kDashed),LineColor(kRed));
+  frameX4->Draw();
+  genCanvas->Update();
+
+  genCanvas->cd(5);
+  RooPlot *frameX5 = TaggE.frame();
+//   CohCont1e.plotOn(frameX5,LineStyle(kDashed),LineColor(kRed));
+//   CohCont2e.plotOn(frameX5,LineStyle(kDashed),LineColor(kGreen));
+  CohCont1.plotOn(frameX5,LineStyle(kDashed),LineColor(kRed));
+  CohCont2.plotOn(frameX5,LineStyle(kDashed),LineColor(kGreen));
+  //  model.plotOn(frameX5,Components(CohProj),LineStyle(kDashed),LineColor(kRed));
+  frameX5->Draw();
+  genCanvas->Update();
+
+  genCanvas->cd(6);
+  RooPlot *frameX6 = TaggE.frame();
+  Enhancement.plotOn(frameX6,LineStyle(kDashed),LineColor(kBlue));
+  frameX6->Draw();
+  genCanvas->Update();
+
+  genCanvas->cd(7);
+  TH2F* hmodel=(TH2F*)CohTotal.createHistogram("TaggE,Theta",100,100);
+  hmodel->Draw("col1");
+  genCanvas->Update();
+
+  genCanvas->cd(8);
+  TH2F* hmodel2=(TH2F*)CohProd.createHistogram("TaggE,Theta",100,100);
+  hmodel2->Draw("col1");
+  genCanvas->Update();
+
+  genCanvas->cd(9);
+  RooPlot *frameX9 = TaggE.frame();
+  EnhD.plotOn(frameX9,LineStyle(kDashed),LineColor(kBlue));
+  frameX9->Draw();
+  genCanvas->Update();
+
+  genCanvas->cd(10);
+  RooPlot *frameX10 = TaggE.frame();
+  Polarisation.plotOn(frameX10,LineStyle(kDashed),LineColor(kRed));
+  frameX10->Draw();
+  genCanvas->Update();
+
+  genCanvas->cd(11);
+  RooPlot *frameX11 = TaggE.frame();
+  Line->plotOn(frameX11,LineStyle(kDashed),LineColor(kBlue));
+  frameX11->Draw();
+  genCanvas->Update();
+
+  genCanvas->cd(12);
+  hTempEnh->GetXaxis()->SetRange(440,960);
+  hTempEnh->Draw();
+  genCanvas->Update();
+
+  //  cout << xd1.getVal() << " " << xd1.getVal() << endl;
+
+  Int_t LowAmor  = 1;
+  Int_t HighAmor = 12;
+
+  hTempEG->Write();
+  hTempAmor->Write();
+  hLine->Write();
+  genCanvas->Write();
+  oFile->Close();
+  iFile->Close();
+
+  cout << endl;
+  cout << inputFile << endl;
+  cout << outFile << endl << endl;
+
+}
+
+//--------------------------------------------------------------------------------------------------

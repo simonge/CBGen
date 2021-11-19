@@ -1,0 +1,389 @@
+#define phonopolar_cxx
+// The class definition in phonopolar.h has been generated automatically
+// by the ROOT utility TTree::MakeSelector(). This class is derived
+// from the ROOT class TSelector. For more information on the TSelector
+// framework see $ROOTSYS/README/README.SELECTOR or the ROOT User Manual.
+
+
+// The following methods are defined in this file:
+//    Begin():        called every time a loop on the tree starts,
+//                    a convenient place to create your histograms.
+//    SlaveBegin():   called after Begin(), when on PROOF called only on the
+//                    slave servers.
+//    Process():      called for each event, in this function you decide what
+//                    to read and fill your histograms.
+//    SlaveTerminate: called at the end of the loop on the tree, when on PROOF
+//                    called only on the slave servers.
+//    Terminate():    called at the end of the loop on the tree,
+//                    a convenient place to draw/fit your histograms.
+//
+// To use this file, try the following session on your Tree T:
+//
+// root> T->Process("phonopolar.C")
+// root> T->Process("phonopolar.C","some options")
+// root> T->Process("phonopolar.C+")
+//
+
+
+#include "phonopolar.h"
+#include <TH2.h>
+#include <TStyle.h>
+#include <TList.h>
+#include <TRandom3.h>
+#include <sstream>
+
+TRandom3 *randoms = 0;
+double XOffset = 1;
+double XSpread = 1.5;
+double YOffset = 1;
+double YSpread = 1.5;
+
+void phonopolar::Begin(TTree * /*tree*/)
+{
+	// The Begin() function is called at the start of the query.
+	// When running with PROOF Begin() is only called on the client.
+	// The tree argument is deprecated (on PROOF 0 is passed).
+
+	TString option = GetOption();
+}
+
+void phonopolar::SlaveBegin(TTree * /*tree*/)
+{
+	// The SlaveBegin() function is called after the Begin() function.
+	// When running with PROOF SlaveBegin() is called on each slave server.
+	// The tree argument is deprecated (on PROOF 0 is passed).
+
+	TString option = GetOption();
+
+	std::stringstream name;
+	std::stringstream title;
+	name << "hcolspectrum";
+	title << "collimated photon energy spectrum";
+	hcolspectrum = new TH1D(name.str().c_str(), title.str().c_str(),
+							100, 0., 13.);
+	hcolspectrum->GetXaxis()->SetTitle("E_{#gamma} (GeV)");
+	hcolspectrum->SetDirectory(0);
+	GetOutputList()->Add(hcolspectrum);
+
+	name.str("");
+	title.str("");
+	name << "hcolspectrum2";
+	title << "collimated polarization-weighted energy spectrum";
+	hcolspectrum2 = new TH1D(name.str().c_str(), title.str().c_str(),
+								100, 0., 13.);
+	hcolspectrum2->GetXaxis()->SetTitle("E_{#gamma} (GeV)");
+	hcolspectrum2->SetDirectory(0);
+	GetOutputList()->Add(hcolspectrum2);
+
+	name.str("");
+	title.str("");
+	name << "hcolpolarization";
+	title << "collimated photon linear polarization 0-90";
+	hcolpolarization = new TProfile(name.str().c_str(), title.str().c_str(),
+									100, 0., 13., -1, 1);
+	hcolpolarization->GetXaxis()->SetTitle("E_{#gamma} (GeV)");
+	hcolpolarization->GetYaxis()->SetTitle("linear polarization");
+	hcolpolarization->SetDirectory(0);
+	GetOutputList()->Add(hcolpolarization);
+
+	name.str("");
+	title.str("");
+	name << "hcolqmag";
+	title << "collimated exchange momentum distribution";
+	hcolqmag = new TH1D(name.str().c_str(), title.str().c_str(),
+						100, 0., 1e-4);
+	hcolqmag->GetXaxis()->SetTitle("q (GeV/c)");
+	hcolqmag->GetYaxis()->SetTitle("counts");
+	hcolqmag->SetDirectory(0);
+	GetOutputList()->Add(hcolqmag);
+
+	name.str("");
+	title.str("");
+	name << "hkhist";
+	title << "h vs k";
+	hkhist = new TH2D(name.str().c_str(), title.str().c_str(),
+						220, -110, 110, 220, -110, 110);
+	hkhist->GetXaxis()->SetTitle("h");
+	hkhist->GetYaxis()->SetTitle("k");
+	hkhist->SetDirectory(0);
+	GetOutputList()->Add(hkhist);
+
+	name.str("");
+	title.str("");
+	name << "lhist";
+	title << "l";
+	lhist = new TH1D(name.str().c_str(), title.str().c_str(),
+						30, -15, 15);
+	lhist->GetXaxis()->SetTitle("l");
+	lhist->SetDirectory(0);
+	GetOutputList()->Add(lhist);
+
+	name.str("");
+	title.str("");
+	name << "qThist";
+	title << "qy vs qx";
+	qThist = new TH2D(name.str().c_str(), title.str().c_str(),
+						800, -1e-4, 1e-4, 800, -1e-4, 1e-4);
+	qThist->GetXaxis()->SetTitle("qx (GeV/c)");
+	qThist->GetYaxis()->SetTitle("qy (GeV/c)");
+	qThist->SetDirectory(0);
+	GetOutputList()->Add(qThist);
+
+	name.str("");
+	title.str("");
+	name << "q3hist";
+	title << "qz";
+	q3hist = new TH1D(name.str().c_str(), title.str().c_str(),
+						200, -1e-6, 0);
+	q3hist->GetXaxis()->SetTitle("q3 (GeV/c)");
+	q3hist->SetDirectory(0);
+	GetOutputList()->Add(q3hist);
+
+	for (int i=0; i < 9; ++i) {
+		name.str("");
+		title.str("");
+		name << "hintens_" << i;
+		title << "beam spot intensity map, "
+				<< 3+i << "-" << 4+i << "GeV";
+		hintens[i] = new TH2D(name.str().c_str(), title.str().c_str(),
+								150, -10., 10., 150, -10., 10.);
+		name.str("");
+		title.str("");
+		name << "h1polar_" << i;
+		title << "beam spot polarization map (0-90), "
+				<< 3+i << "-" << 4+i << "GeV";
+		h1polar[i] = new TH2D(name.str().c_str(), title.str().c_str(),
+								50, -10., 10., 50, -10., 10.);
+		name.str("");
+		title.str("");
+		name << "h2polar_" << i;
+		title << "beam spot w**2 p**2 map (0-90), "
+				<< 3+i << "-" << 4+i << "GeV";
+		h2polar[i] = new TH2D(name.str().c_str(), title.str().c_str(),
+								50, -10., 10., 50, -10., 10.);
+		name.str("");
+		title.str("");
+		name << "h3polar_" << i;
+		title << "beam spot w**3 p**2 map (0-90), "
+				<< 3+i << "-" << 4+i << "GeV";
+		h3polar[i] = new TH2D(name.str().c_str(), title.str().c_str(),
+								50, -10., 10., 50, -10., 10.);
+		name.str("");
+		title.str("");
+		name << "h4polar_" << i;
+		title << "beam spot w**4 p**2 map (0-90), "
+				<< 3+i << "-" << 4+i << "GeV";
+		h4polar[i] = new TH2D(name.str().c_str(), title.str().c_str(),
+								50, -10., 10., 50, -10., 10.);
+		hintens[i]->SetDirectory(0);
+		h1polar[i]->SetDirectory(0);
+		h2polar[i]->SetDirectory(0);
+		h3polar[i]->SetDirectory(0);
+		h4polar[i]->SetDirectory(0);
+		GetOutputList()->Add(hintens[i]);
+		GetOutputList()->Add(h1polar[i]);
+		GetOutputList()->Add(h2polar[i]);
+		GetOutputList()->Add(h3polar[i]);
+		GetOutputList()->Add(h4polar[i]);
+	  
+	  name.str("");
+		title.str("");
+		name << "hintensMod_" << i;
+		title << "modified beam spot intensity map, "
+				<< 3+i << "-" << 4+i << "GeV";
+		hintensMod[i] = new TH2D(name.str().c_str(), title.str().c_str(),
+								150, -10., 10., 150, -10., 10.);
+		name.str("");
+		title.str("");
+		name << "h1polarMod_" << i;
+		title << "modified beam spot polarization map (0-90), "
+				<< 3+i << "-" << 4+i << "GeV";
+		h1polarMod[i] = new TH2D(name.str().c_str(), title.str().c_str(),
+								50, -10., 10., 50, -10., 10.);
+		name.str("");
+		title.str("");
+		name << "h2polarMod_" << i;
+		title << "modified beam spot w**2 p**2 map (0-90), "
+				<< 3+i << "-" << 4+i << "GeV";
+		h2polarMod[i] = new TH2D(name.str().c_str(), title.str().c_str(),
+								50, -10., 10., 50, -10., 10.);
+		name.str("");
+		title.str("");
+		name << "h3polarMod_" << i;
+		title << "modified beam spot w**3 p**2 map (0-90), "
+				<< 3+i << "-" << 4+i << "GeV";
+		h3polarMod[i] = new TH2D(name.str().c_str(), title.str().c_str(),
+								50, -10., 10., 50, -10., 10.);
+		name.str("");
+		title.str("");
+		name << "h4polarMod_" << i;
+		title << "beam spot w**4 p**2 map (0-90), "
+				<< 3+i << "-" << 4+i << "GeV";
+		h4polarMod[i] = new TH2D(name.str().c_str(), title.str().c_str(),
+								50, -10., 10., 50, -10., 10.);
+		hintensMod[i]->SetDirectory(0);
+		h1polarMod[i]->SetDirectory(0);
+		h2polarMod[i]->SetDirectory(0);
+		h3polarMod[i]->SetDirectory(0);
+		h4polarMod[i]->SetDirectory(0);
+		GetOutputList()->Add(hintensMod[i]);
+		GetOutputList()->Add(h1polarMod[i]);
+		GetOutputList()->Add(h2polarMod[i]);
+		GetOutputList()->Add(h3polarMod[i]);
+		GetOutputList()->Add(h4polarMod[i]);
+	}
+	
+// 	TString filename = phonocorrdir.Append("phonoCorr.root");
+// 	TFile fin(filename);
+// 	hDQ2_low_q2[0] = (TH2D*)fin.Get("hDQ2_low_q2");
+// 	hDQ2_low_q2[1] = (TH2D*)fin.Get("hDQ2_low_q2_T300");
+// 	hDQ2q_high_q2[0] = (TH2D*)fin.Get("hDQ2q_high_q2");
+// 	hDQ2q_high_q2[1] = (TH2D*)fin.Get("hDQ2q_high_q2_T300");
+// 	for (int i=0; i < 2; ++i) {
+// 		hDQ2_low_q2[i]->SetDirectory(0);
+// 		hDQ2q_high_q2[i]->SetDirectory(0);
+// 	}
+}
+
+Bool_t phonopolar::Process(Long64_t entry)
+{
+	// The Process() function is called for each entry in the tree (or possibly
+	// keyed object in the case of PROOF) to be processed. The entry argument
+	// specifies which entry in the currently loaded tree is to be processed.
+	// When processing keyed objects with PROOF, the object is already loaded
+	// and is available via the fObject pointer.
+	//
+	// This function should contain the \"body\" of the analysis. It can contain
+	// simple or elaborate selection criteria, run algorithms on the data
+	// of the event and typically fill histograms.
+	//
+	// The processing can be stopped by calling Abort().
+	//
+	// Use fStatus to set the return value of TTree::Process().
+	//
+	// The return value is currently not used.
+
+	fReader.SetEntry(entry);
+	static double distanceRadCol = 1.5e3; // units are mm
+	double cx = distanceRadCol * k[0] / k[2];
+	double cy = distanceRadCol * k[1] / k[2];
+	double phi = atan2(cy,cx);
+	double ew = *diffXS * *wgt;
+	double p0lab = *polar * 2 - 1;
+	double q2 = qphoton[0] * qphoton[0] +
+				qphoton[1] * qphoton[1] +
+				qphoton[2] * qphoton[2];
+#if 0
+	double Q2 = Qphonons[0] * Qphonons[0] +
+				Qphonons[1] * Qphonons[1] +
+				Qphonons[2] * Qphonons[2];
+	double q2_split = hDQ2q_high_q2[0]->GetYaxis()->GetBinLowEdge(1);
+	if (q2 > q2_split) {
+		int imax = hDQ2q_high_q2[0]->GetNbinsX();
+		int jmax = hDQ2q_high_q2[0]->GetNbinsY();
+		double xmax = hDQ2q_high_q2[0]->GetXaxis()->GetBinLowEdge(imax);
+		double xmin = hDQ2q_high_q2[0]->GetXaxis()->GetBinLowEdge(1);
+		double ymax = hDQ2q_high_q2[0]->GetYaxis()->GetBinLowEdge(jmax);
+		double ymin = hDQ2q_high_q2[0]->GetYaxis()->GetBinLowEdge(1);
+		double x = sqrt(Q2 / q2);
+		x = (x < xmin)? xmin : (x > xmax)? xmax : x;
+		double y = (q2 < ymin)? ymin : (q2 > ymax)? ymax : q2;
+		double DQ2q[2];
+		DQ2q[0] = hDQ2q_high_q2[0]->Interpolate(x,y);
+		DQ2q[1] = hDQ2q_high_q2[1]->Interpolate(x,y);
+		if (fabs(log(DQ2q[0]) - log(q2) / 2 - logwgts[4]) < 1e-6) {
+			ew *= DQ2q[1] / DQ2q[0];
+		}
+		else {
+			std::cout << "high_q2: expected " << log(DQ2q[0]) - log(q2)/2
+					<< " but found " << logwgts[4] 
+					<< ", q2 = " << q2
+					<< ", Q = " << sqrt(Q2)
+					<< std::endl;
+			ew = 0;
+		}
+	}
+	else {
+		int imax = hDQ2_low_q2[0]->GetNbinsX();
+		int jmax = hDQ2_low_q2[0]->GetNbinsY();
+		double xmax = hDQ2_low_q2[0]->GetXaxis()->GetBinLowEdge(imax);
+		double xmin = hDQ2_low_q2[0]->GetXaxis()->GetBinLowEdge(1);
+		double ymax = hDQ2_low_q2[0]->GetYaxis()->GetBinLowEdge(jmax);
+		double ymin = hDQ2_low_q2[0]->GetYaxis()->GetBinLowEdge(1);
+		double x = sqrt(Q2);
+		x = (x < xmin)? xmin : (x > xmax)? xmax : x;
+		double y = (q2 < ymin)? ymin : (q2 > ymax)? ymax : q2;
+		double DQ2[2];
+		DQ2[0] = hDQ2_low_q2[0]->Interpolate(x,y) * q2 / y;
+		DQ2[1] = hDQ2_low_q2[1]->Interpolate(x,y) * q2 / y;
+		if (fabs(log(DQ2[0]) - logwgts[4]) < 1e-6) {
+			ew *= DQ2[1] / DQ2[0];
+		}
+		else {
+			std::cout << "low_q2: expected " << log(DQ2[0]) + log(y / q2)
+					<< " but found " << logwgts[4] << std::endl;
+			ew = 0;
+		}
+	}
+#endif
+	
+	
+	if (randoms == 0)
+		randoms = new TRandom3(0);
+	double cx0 = randoms->Gaus(XOffset, XSpread);
+	double cy0 = randoms->Gaus(YOffset, YSpread);
+	double dx = cx + cx0;
+	double dy = cy + cy0;
+	
+	int i = int(k[2] - 3.);
+	if (i >= 0 && i < 9) {
+		double w2 = ew * ew;
+		double w3 = w2 * ew;
+		double w4 = w3 * ew;
+		double p0lab2 = p0lab * p0lab;
+		hintens[i]->Fill(cx, cy, ew);
+		h1polar[i]->Fill(cx, cy, ew * p0lab);
+		h2polar[i]->Fill(cx, cy, w2 * p0lab2);
+		h3polar[i]->Fill(cx, cy, w3 * p0lab2);
+		h4polar[i]->Fill(cx, cy, w4 * p0lab2);
+		hintensMod[i]->Fill(dx, dy, ew);
+		h1polarMod[i]->Fill(dx, dy, ew * p0lab);
+		h2polarMod[i]->Fill(dx, dy, w2 * p0lab2);
+		h3polarMod[i]->Fill(dx, dy, w3 * p0lab2);
+		h4polarMod[i]->Fill(dx, dy, w4 * p0lab2);
+	}
+
+	if (sqrt(dx*dx + dy*dy) < 2.5) {
+		hcolspectrum->Fill(k[2], ew);
+		hcolspectrum2->Fill(k[2], p0lab * ew);
+		hcolpolarization->Fill(k[2], p0lab, ew);
+		hcolqmag->Fill(sqrt(q2), ew);
+		hkhist->Fill(hkl[0], hkl[1], ew);
+		lhist->Fill(hkl[2], ew);
+		qThist->Fill(qphoton[0], qphoton[1], ew);
+		q3hist->Fill(qphoton[2], ew);
+	}
+
+	return kTRUE;
+}
+
+void phonopolar::SlaveTerminate()
+{
+	// The SlaveTerminate() function is called after all entries or objects
+	// have been processed. When running with PROOF SlaveTerminate() is called
+	// on each slave server.
+
+}
+
+void phonopolar::Terminate()
+{
+	// The Terminate() function is the last function to be called during
+	// a query. It always runs on the client, it can be used to present
+	// the results graphically or save the results to file.
+
+	TFile fout("phonopolar.root", "recreate");
+	TListIter *iter = (TListIter*)GetOutputList()->MakeIterator();
+	for (TObject *obj = (*iter)(); obj != 0; obj = iter->Next()) {
+		obj->Write();
+	}
+}

@@ -1,0 +1,110 @@
+#include <TF1.h>
+#include <TH2F.h>
+#include <TFile.h>
+#include <TChain.h>
+#include <TCanvas.h>
+#include <TTree.h>
+#include <TVector3.h>
+#include <TLorentzVector.h>
+#include <TTreeReader.h>
+#include <TTreeReaderValue.h>
+#include <TTreeReaderArray.h>
+
+void MakePlots(){
+  
+  TFile* iFile = new TFile("outPlots001.root","READ");
+
+  TCanvas* can = new TCanvas("can","can",1800,1800);
+  gStyle->SetOptStat(000001111);
+  gStyle->SetStatX(0.8);
+  gStyle->SetStatY(0.2);
+
+  gStyle->SetStatW(0.2);
+  gStyle->SetStatH(0.02);
+
+  can->SetLogz();
+  can->Divide(2,2);
+
+  can->cd(1);
+  gPad->SetLogz();
+  iFile->Get("amoCircHist2D")->Draw("colz");
+  auto amoCirchistpol = (TH1*)iFile->Get("amoCirchistpol");
+  amoCirchistpol->Draw("same hist");
+
+  auto circFunc = (TF1*)iFile->Get("circ");
+  circFunc->SetNpx(1000);
+  circFunc->SetLineWidth(1);
+  circFunc->SetLineColor(4);
+  circFunc->Draw("same hist");
+
+  can->cd(2);
+  gPad->SetLogz();
+  iFile->Get("circhist2D")->Draw("colz");
+  auto circhistpol = (TH1*)iFile->Get("circhistpol");
+  circhistpol->Draw("same hist");
+  circFunc->Draw("same hist");
+
+  can->cd(3);
+
+  TH1* tempHist2 = (TH1*)amoCirchistpol->Clone("divided2");
+
+  tempHist2->Divide(circFunc);
+  tempHist2->SetMaximum(1.1);
+  tempHist2->SetMinimum(0.9);
+  tempHist2->SetLineColor(2);
+  tempHist2->Draw("hist same");
+  
+  can->cd(4);
+
+  TH1* tempHist = (TH1*)circhistpol->Clone("divided");
+
+  tempHist->Divide(circFunc);
+  tempHist->SetMaximum(1.1);
+  tempHist->SetMinimum(0.9);
+  tempHist->Draw("hist");
+
+  can->SaveAs("CircBremsPlots.pdf");
+
+  TCanvas* can2 = new TCanvas("can2","can2",1800,1800);
+
+  can2->SetLogz();
+  can2->Divide(3,2);
+  
+  can2->cd(1);
+  gPad->SetLogy();
+  
+  auto amohist = (TH1*)iFile->Get("amohist");
+  amohist->Draw("colz");
+  
+  can2->cd(2);
+  gPad->SetLogy();
+
+  auto polhist = (TH1*)iFile->Get("polhist");
+  polhist->Draw("colz");
+
+  can2->cd(3);
+  gPad->SetLogy();
+
+  TH1* tempHist3 = (TH1*)polhist->Clone("enhance");
+  
+  tempHist3->Divide(amohist);
+  // tempHist3->SetMaximum(1.1);
+//   tempHist3->SetMinimum(0.9);
+  tempHist3->Draw();
+  
+  
+
+  can2->cd(4);
+
+  iFile->Get("amohistpol")->Draw("colz");
+
+  can2->cd(5);
+
+  iFile->Get("polhistpol")->Draw("colz");
+ 
+  
+  can2->SaveAs("LinBremsPlots.pdf");
+  
+
+
+}
